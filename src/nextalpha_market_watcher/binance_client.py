@@ -537,14 +537,6 @@ class BinanceClient:
                                     )
                                     break
                                 continue
-                            if msg.type == aiohttp.WSMsgType.TEXT:
-                                raw = msg.data.encode("utf-8")
-                            elif msg.type == aiohttp.WSMsgType.BINARY:
-                                raw = msg.data
-                            elif msg.type == aiohttp.WSMsgType.ERROR:
-                                raise msg.data
-                            else:
-                                continue
                             if self._ws_rebuild_generation.get(shard_id, 0) != local_generation:
                                 logger.warning(
                                     "ws.rebuild.triggered interval=%s shard=%s symbols=%s",
@@ -553,6 +545,20 @@ class BinanceClient:
                                     len(symbols),
                                 )
                                 break
+                            if msg.type in (
+                                aiohttp.WSMsgType.CLOSE,
+                                aiohttp.WSMsgType.CLOSING,
+                                aiohttp.WSMsgType.CLOSED,
+                            ):
+                                raise ConnectionError("WebSocket closed by peer")
+                            if msg.type == aiohttp.WSMsgType.TEXT:
+                                raw = msg.data.encode("utf-8")
+                            elif msg.type == aiohttp.WSMsgType.BINARY:
+                                raw = msg.data
+                            elif msg.type == aiohttp.WSMsgType.ERROR:
+                                raise msg.data
+                            else:
+                                continue
                             # Treat any successfully received WS frame as shard activity.
                             # This prevents watchdog false positives when only non-closed kline
                             # updates (x=false) are flowing between close boundaries.
@@ -730,3 +736,4 @@ class BinanceClient:
                 "worst_shard_ago_ms": worst_ago_ms,
             }
         return out
+
