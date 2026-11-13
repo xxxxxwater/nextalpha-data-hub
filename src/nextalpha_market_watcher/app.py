@@ -1604,33 +1604,45 @@ class App:
         event_id = str(item.get("event_id") or "")
         if not event_id:
             return
+        raw_receive_ms = item.get("downstream_receive_ms")
+        if isinstance(raw_receive_ms, bool) or not isinstance(raw_receive_ms, (int, str)):
+            return
         try:
-            downstream_receive_ms = int(item.get("downstream_receive_ms"))
+            downstream_receive_ms = int(raw_receive_ms)
         except (TypeError, ValueError):
             return
+        if downstream_receive_ms <= 0:
+            return
+        server_ingress_ms = int(time.time() * 1000)
         downstream_region = str(item.get("downstream_region") or "")
         topic = self._ack_topic(item)
         event_key = (topic, event_id)
 
         async with self._pending_latency_lock:
-            ev = self._pending_latency.pop(event_key, None)
-            batch_key = self._event_close_time.pop(event_key, None)
+            ev = self._pending_latency.get(event_key)
             if ev is None and not item.get("topic"):
                 matches = [key for key in self._pending_latency.keys() if key[1] == event_id]
                 if len(matches) == 1:
                     event_key = matches[0]
                     topic = event_key[0]
-                    ev = self._pending_latency.pop(event_key, None)
-                    batch_key = self._event_close_time.pop(event_key, None)
+                    ev = self._pending_latency.get(event_key)
+            if ev is not None:
+                # Client receipt times require synchronized clocks. Reject impossible
+                # values without consuming the event, so a corrected ACK can retry.
+                earliest_ms = max(ev.exchange_event_ms, ev.service_ingest_ms, ev.service_publish_ms)
+                if not earliest_ms <= downstream_receive_ms <= server_ingress_ms:
+                    logger.info("ack.invalid_receive_time topic=%s event_id=%s", topic, event_id)
+                    return
+                self._pending_latency.pop(event_key, None)
+                batch_key = self._event_close_time.pop(event_key, None)
         if ev is None:
             logger.info("ack.unknown topic=%s event_id=%s", topic, event_id)
             return
 
-        server_ingress_ms = int(time.time() * 1000)
         ev.downstream_receive_ms = downstream_receive_ms
         ev.downstream_region = downstream_region or None
-        svc_to_downstream = max(0, server_ingress_ms - ev.service_publish_ms)
-        e2e = max(0, server_ingress_ms - ev.exchange_event_ms)
+        svc_to_downstream = ev.service_to_downstream_ms()
+        e2e = ev.end_to_end_ms()
         region_ok = ev.region_aligned()
         logger.info(
             "latency.final event_id=%s symbol=%s e2e_ms=%s exchange_to_service_ms=%s "
@@ -1646,7 +1658,7 @@ class App:
         )
         if batch_key is not None:
             self._ack_service_to_downstream_by_close.setdefault(batch_key, []).append(int(svc_to_downstream))
-            ingest_to_downstream = max(0, server_ingress_ms - ev.service_ingest_ms)
+            ingest_to_downstream = downstream_receive_ms - ev.service_ingest_ms
             self._ack_ingest_to_downstream_by_close.setdefault(batch_key, []).append(int(ingest_to_downstream))
             if sender_client_id is not None:
                 self._ack_clients_by_close.setdefault(batch_key, set()).add(sender_client_id)
@@ -2271,3 +2283,4 @@ class App:
             except Exception:
                 return 0
         return 0
+

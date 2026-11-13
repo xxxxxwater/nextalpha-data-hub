@@ -22,6 +22,19 @@ The watcher computes:
 - service -> downstream = `downstream_receive_ms - service_publish_ms`
 - end-to-end = `downstream_receive_ms - exchange_event_ms`
 
+Row ACK receipt timestamps must be positive integer milliseconds (integer strings
+are accepted for Redis fields). Consumer and service clocks must be synchronized.
+A receipt timestamp earlier than the event's exchange/ingest/publish timestamps,
+or later than the server's ACK arrival time, is rejected without consuming the
+pending event. A corrected ACK may retry while that event remains pending.
+Missing or invalid receipt times do not produce a latency sample; the server does
+not substitute ACK arrival time or clamp an invalid sample to zero. These
+sanity checks do not authenticate a client's clock or establish clock accuracy.
+
+The row ACK log, persisted `phase=ack` event, and row-based batch aggregates all
+use client receipt time. They exclude client ACK processing and the return path.
+Batch ACK echo measurements below retain their separate server-observed semantics.
+
 Region consistency:
 
 - compare `service_region` and `downstream_region`
@@ -51,3 +64,4 @@ Legacy fallback fields (optional when `batch_push_done_ms` is absent):
 - `downstream_integrated_ms` for `batch_integrated_ack`
 - `downstream_compute_ms` for `batch_compute_ack`
 - `downstream_order_ms` for `batch_order_ack`
+
