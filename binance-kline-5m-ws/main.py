@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import heapq
 import os
 import sys
 import time
@@ -16,7 +17,7 @@ from array import array
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import orjson
 import websockets
@@ -67,6 +68,7 @@ LOG_PROGRESS_EVERY = _env_int("LOG_PROGRESS_EVERY", 0)  # 0 = off on hot path
 QUEUE_MAXSIZE = _env_int("QUEUE_MAXSIZE", 0)  # 0 = unbounded
 PROCESSOR_WORKERS = _env_int("PROCESSOR_WORKERS", 6)
 LOG_QUEUE_MAXSIZE = _env_int("LOG_QUEUE_MAXSIZE", 100_000)
+TRACKER_MAX_BATCHES = max(1, _env_int("TRACKER_MAX_BATCHES", 128))
 BINANCE_WS_PROXY_URL = (
     os.environ.get("BINANCE_WS_PROXY_URL", "").strip()
     or os.environ.get("WS_PROXY_URL", "").strip()
@@ -206,11 +208,19 @@ class BatchStats:
 
 
 class BitmapBatchTracker:
-    """O(1) per symbol; single consumer task — no lock on hot path."""
+    """Bounded batch history; O(1) per symbol, O(log capacity) per new batch."""
 
-    __slots__ = ("expected", "symbol_index", "_bits", "_tally", "_reported", "_stats")
+    __slots__ = ("expected", "symbol_index", "_bits", "_tally", "_reported", "_stats",
+                 "_max_batches", "_retained", "_expired_through", "_on_expire")
 
-    def __init__(self, symbols: list[str]) -> None:
+    def __init__(self, symbols: list[str], *, max_batches: int = TRACKER_MAX_BATCHES,
+                 on_expire: Optional[Callable[[str], None]] = None) -> None:
+        if isinstance(max_batches, bool) or not isinstance(max_batches, int) or max_batches < 1:
+            raise ValueError("max_batches must be a positive integer")
+        self._max_batches = max_batches
+        self._retained: list[int] = []  # Min-heap covering pending AND completed batches.
+        self._expired_through: Optional[int] = None
+        self._on_expire = on_expire
         self.expected = len(symbols)
         self.symbol_index = {s: i for i, s in enumerate(symbols)}
         self._bits: dict[int, array] = {}
@@ -236,8 +246,26 @@ class BitmapBatchTracker:
         if idx is None:
             return False, 0, None
 
+        if self._expired_through is not None and open_time_ms <= self._expired_through:
+            return False, 0, None
+
         bits = self._bits.get(open_time_ms)
         if bits is None:
+            if len(self._retained) >= self._max_batches:
+                if open_time_ms <= self._retained[0]:
+                    return False, 0, None  # Never reopen history outside the retained window.
+                expired = heapq.heappop(self._retained)
+                self._expired_through = expired
+                count = self._tally.pop(expired, None)
+                self._bits.pop(expired, None)
+                self._stats.pop(expired, None)
+                self._reported.discard(expired)
+                if count is not None and self._on_expire is not None:
+                    self._on_expire(
+                        f"[batch-expired] open_time_ms={expired} received={count}/{self.expected} "
+                        f"missing={self.expected - count} reason=retention-capacity"
+                    )
+            heapq.heappush(self._retained, open_time_ms)
             bits = array("B", [0]) * self.expected
             self._bits[open_time_ms] = bits
             self._tally[open_time_ms] = 0
@@ -269,7 +297,7 @@ class KlineSubscriber:
     def __init__(self, urls: list[str], symbols: list[str]) -> None:
         self.urls = urls
         self.symbols = symbols
-        self.tracker = BitmapBatchTracker(symbols)
+        self.tracker = BitmapBatchTracker(symbols, on_expire=self._log)
         self.raw_queue: asyncio.Queue[tuple[int, bytes, int]]
         self.tracker_queue: asyncio.Queue
         self.log_queue: asyncio.Queue[str]
@@ -491,3 +519,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

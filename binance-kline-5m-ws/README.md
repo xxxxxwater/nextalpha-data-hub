@@ -177,3 +177,23 @@ python parse_streams.py "/path/to/klines_ws_1h_528(1).txt" \
 ## License
 
 仅供学习与内部使用；使用 Binance API 请遵守其服务条款。
+
+
+## Bounded batch-statistics history
+
+`TRACKER_MAX_BATCHES` (default 128, minimum 1) bounds the combined number of
+pending and completed candle-open timestamps retained by the bitmap tracker.
+It is a capacity window, not a wall-clock timeout, and is independent of interval.
+Each pending batch stores at most one sample per configured symbol.
+
+On a newer batch when full, the oldest retained open timestamp is removed from
+all tracker containers. An incomplete batch emits a `[batch-expired]` summary
+with received and missing counts through the existing non-blocking log queue
+(which may drop messages when full). Completed-batch deduplication is bounded by
+the same window. Frames at or before the eviction watermark, or older than the
+oldest retained timestamp when full, are ignored, never recreated. Within the
+window, out-of-order frames can still complete a batch exactly once.
+
+This is in-memory monitoring state, not historical market storage. Restart resets
+the window. It does not change subscription/reconnect or raw/tracker queue
+capacity; it does not bound the memory of the entire process.
