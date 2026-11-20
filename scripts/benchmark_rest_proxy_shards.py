@@ -440,7 +440,7 @@ async def run_proxy_shard(
         "failures": failures,
         "rate_limited": rate_limited,
         "per_request_ms": summarize(request_costs),
-        "results": [] if args.no_details else results,
+        "results": results,
     }
 
 
@@ -469,9 +469,10 @@ async def run_round(
     rate_limited = sum(int(item["rate_limited"]) for item in shard_results)
     shard_wall_values = [float(item["shard_wall_ms"]) for item in shard_results]
     request_values: list[float] = []
-    for item in shard_results:
-        if item.get("results"):
-            request_values.extend(float(result.get("request_cost_ms") or 0) for result in item["results"])
+    for shard in shard_results:
+        request_values.extend(float(result["request_cost_ms"]) for result in shard["results"])
+        if args.no_details:
+            shard["results"] = []
     return {
         "event": "rest_proxy_shard_round",
         "round_index": round_index,
