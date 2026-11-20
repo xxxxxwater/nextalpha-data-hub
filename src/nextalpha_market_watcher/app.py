@@ -658,12 +658,13 @@ class App:
         batch_push_done_ms = int(time.time() * 1000)
         for row in payload:
             row["batch_push_done_ms"] = batch_push_done_ms
+        # Clients can ACK while the broadcast is still sending to other clients.
+        if batch_done:
+            self._batch_done_publish_ms_by_close[(topic, close_time_ms)] = batch_push_done_ms
         pushed_clients = await self._klines_ws.broadcast_json(payload, topic=topic)
         if track_latency:
             self._enqueue_latency_events(self._build_published_latency_events(payload, topic))
         push_done_ms = int(time.time() * 1000)
-        if batch_done:
-            self._batch_done_publish_ms_by_close[(topic, close_time_ms)] = batch_push_done_ms
         service_to_client_no_ack_ms = max(0, push_done_ms - publish_ms)
         if pushed_clients > 0:
             self._push_1h += pushed_clients * len(payload)
