@@ -17,6 +17,10 @@ except ImportError:  # pragma: no cover - optional local dependency
     requests = None
 
 
+# This diagnostic CLI requires proxy settings supplied by the operator.
+__test__ = False
+
+
 DEFAULT_PROXIES = [
     "13.215.112.90",
     "18.143.179.221",

@@ -441,12 +441,11 @@ class App:
 
     async def _reset_full_klines_batch_state(self, symbols: list[str]) -> None:
         async with self._pending_lock:
+            # Retain published closes so backfill after a symbol refresh stays idempotent.
             self._expected_symbols = set(symbols)
             self._pending_by_close.clear()
             self._pending_has_ws.clear()
             self._pending_first_ingest_ms.clear()
-            self._published_close_times.clear()
-            self._published_close_order.clear()
             self._rest_repairing_close_times.clear()
         async with self._passthrough_shard_lock:
             self._passthrough_shard_buffers.clear()
@@ -658,12 +657,13 @@ class App:
         batch_push_done_ms = int(time.time() * 1000)
         for row in payload:
             row["batch_push_done_ms"] = batch_push_done_ms
+        # Clients can ACK while the broadcast is still sending to other clients.
+        if batch_done:
+            self._batch_done_publish_ms_by_close[(topic, close_time_ms)] = batch_push_done_ms
         pushed_clients = await self._klines_ws.broadcast_json(payload, topic=topic)
         if track_latency:
             self._enqueue_latency_events(self._build_published_latency_events(payload, topic))
         push_done_ms = int(time.time() * 1000)
-        if batch_done:
-            self._batch_done_publish_ms_by_close[(topic, close_time_ms)] = batch_push_done_ms
         service_to_client_no_ack_ms = max(0, push_done_ms - publish_ms)
         if pushed_clients > 0:
             self._push_1h += pushed_clients * len(payload)
@@ -1973,12 +1973,9 @@ class App:
         topic, close_time_ms = batch_key
         expected = self._ack_expected_by_close.get(batch_key, 0)
         values = self._ack_service_to_downstream_by_close.get(batch_key, [])
-        ingest_to_downstream_values = self._ack_ingest_to_downstream_by_close.get(batch_key, [])
         batch_done_to_ack_values = self._batch_done_to_ack_by_close.get(batch_key, [])
-        batch_done_to_integrated_ack_values = self._batch_done_to_integrated_ack_by_close.get(batch_key, [])
         batch_done_to_compute_ack_values = self._batch_done_to_compute_ack_by_close.get(batch_key, [])
         batch_done_to_order_ack_values = self._batch_done_to_order_ack_by_close.get(batch_key, [])
-        ack_clients = len(self._ack_clients_by_close.get(batch_key, set()))
         batch_ack_clients = len(self._batch_ack_clients_by_close.get(batch_key, set()))
         batch_integrated_ack_clients = len(self._batch_integrated_ack_clients_by_close.get(batch_key, set()))
         batch_compute_ack_clients = len(self._batch_compute_ack_clients_by_close.get(batch_key, set()))
