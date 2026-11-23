@@ -441,12 +441,11 @@ class App:
 
     async def _reset_full_klines_batch_state(self, symbols: list[str]) -> None:
         async with self._pending_lock:
+            # Retain published closes so backfill after a symbol refresh stays idempotent.
             self._expected_symbols = set(symbols)
             self._pending_by_close.clear()
             self._pending_has_ws.clear()
             self._pending_first_ingest_ms.clear()
-            self._published_close_times.clear()
-            self._published_close_order.clear()
             self._rest_repairing_close_times.clear()
         async with self._passthrough_shard_lock:
             self._passthrough_shard_buffers.clear()
