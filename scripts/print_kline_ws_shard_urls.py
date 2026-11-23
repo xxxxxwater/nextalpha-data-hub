@@ -9,7 +9,6 @@ Example:
 from __future__ import annotations
 
 import argparse
-from urllib.parse import urlencode
 
 import httpx
 
@@ -38,19 +37,6 @@ def build_symbol_batches(symbols: list[str], interval: str, batch_size: int) -> 
     batches: list[list[str]] = []
     current: list[str] = []
     for symbol in symbols:
-        stream_name = f"{symbol.lower()}@kline_{interval}"
-        if current:
-            projected_chars = len(
-                urlencode(
-                    {
-                        "streams": "/".join(
-                            [*(f"{s.lower()}@kline_{interval}" for s in current), stream_name]
-                        )
-                    }
-                )
-            )
-        else:
-            projected_chars = len(urlencode({"streams": stream_name}))
         hit_size_limit = len(current) >= max(1, batch_size)
         if current and hit_size_limit:
             batches.append(current)

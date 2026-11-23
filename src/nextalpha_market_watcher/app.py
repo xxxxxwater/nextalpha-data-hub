@@ -1973,12 +1973,9 @@ class App:
         topic, close_time_ms = batch_key
         expected = self._ack_expected_by_close.get(batch_key, 0)
         values = self._ack_service_to_downstream_by_close.get(batch_key, [])
-        ingest_to_downstream_values = self._ack_ingest_to_downstream_by_close.get(batch_key, [])
         batch_done_to_ack_values = self._batch_done_to_ack_by_close.get(batch_key, [])
-        batch_done_to_integrated_ack_values = self._batch_done_to_integrated_ack_by_close.get(batch_key, [])
         batch_done_to_compute_ack_values = self._batch_done_to_compute_ack_by_close.get(batch_key, [])
         batch_done_to_order_ack_values = self._batch_done_to_order_ack_by_close.get(batch_key, [])
-        ack_clients = len(self._ack_clients_by_close.get(batch_key, set()))
         batch_ack_clients = len(self._batch_ack_clients_by_close.get(batch_key, set()))
         batch_integrated_ack_clients = len(self._batch_integrated_ack_clients_by_close.get(batch_key, set()))
         batch_compute_ack_clients = len(self._batch_compute_ack_clients_by_close.get(batch_key, set()))

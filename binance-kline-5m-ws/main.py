@@ -428,7 +428,6 @@ class KlineSubscriber:
                 first_recv_ms = ns_to_ms(stats.first_recv_ns)
                 last_recv_ms = ns_to_ms(stats.last_recv_ns)
                 first_proc_ms = ns_to_ms(stats.first_proc_ns)
-                last_proc_ms = ns_to_ms(stats.last_proc_ns)
                 close_to_first_recv = first_recv_ms - close_time
                 close_to_last_recv = last_recv_ms - close_time
                 close_to_done = last_ms - close_time
