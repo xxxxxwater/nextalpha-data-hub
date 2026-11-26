@@ -75,7 +75,7 @@ websocket:
   alerts_port: 8765
   klines_port: 8766
   # 全量市场推 1h；重点币 1h shard 会先推重点 topic，同时汇入全量聚合
-  klines_interval: 5m
+  klines_interval: 1h
   klines_all_topic: klines.all.1h
   # 普通 1h 分片模式：从这里剥离重点币，每条WS连接承载约200个symbol
   klines_ws_batch_size: 200
