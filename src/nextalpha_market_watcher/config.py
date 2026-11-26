@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Literal
+import re
+from typing import Literal, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ServiceMode = Literal["alerts", "klines", "all"]
@@ -115,6 +116,15 @@ class WebSocketPushConfig(BaseModel):
     # If True, when WS is silent for a while, run low-frequency REST fallback repair.
     # Keep this on for testing, and disable in low-latency production once WS is stable.
     klines_ws_silence_fallback_rest: bool = True
+
+    @model_validator(mode="after")
+    def validate_full_market_topic(self) -> Self:
+        topic = self.klines_all_topic.strip()
+        match = re.fullmatch(r"klines\.all\.(\d+[smhdwM])", topic)
+        interval = self.klines_interval.strip() or "1h"
+        if match and match[1] != interval:
+            raise ValueError(f"klines_all_topic {topic!r} does not match klines_interval {interval!r}")
+        return self
 
 
 class AppConfig(BaseSettings):
