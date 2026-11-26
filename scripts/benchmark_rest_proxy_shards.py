@@ -19,6 +19,11 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
+if __package__:
+    from . import benchmark_kline_target as kline_target
+else:
+    import benchmark_kline_target as kline_target
+
 
 DEFAULT_MAJOR_SYMBOLS = "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT"
 DEFAULT_OUTPUT_DIR = "logs/rest_proxy_shard_latency"
@@ -88,12 +93,6 @@ class RequestPacer:
 
 def now_ms() -> int:
     return int(time.time() * 1000)
-
-
-def ms_text(value: int | None) -> str:
-    if value is None:
-        return ""
-    return datetime.fromtimestamp(value / 1000).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
 def parse_csv(raw: str) -> list[str]:
@@ -300,6 +299,7 @@ async def fetch_rest_kline(
     limit: int,
     end_time_ms: int | None,
     require_exact_close: bool,
+    symbol_close: bool = False,
 ) -> dict[str, Any]:
     await pacer.wait()
     request_start_ms = now_ms()
@@ -331,18 +331,12 @@ async def fetch_rest_kline(
         resp.raise_for_status()
         rows = resp.json()
         result["rows"] = len(rows) if isinstance(rows, list) else 0
-        matched_close_ms: int | None = None
+        matched_close_ms = None
         if isinstance(rows, list):
-            if end_time_ms is not None:
-                for row in reversed(rows):
-                    if isinstance(row, list) and len(row) >= 8 and int(row[6]) == end_time_ms:
-                        matched_close_ms = int(row[6])
-                        break
-            elif rows and isinstance(rows[-1], list) and len(rows[-1]) >= 8:
-                matched_close_ms = int(rows[-1][6])
+            matched_close_ms = kline_target.match_close_time(rows, end_time_ms, symbol_close)
         result["matched_close_time_ms"] = matched_close_ms
         result["data_ok"] = matched_close_ms is not None
-        if require_exact_close and end_time_ms is not None and matched_close_ms != end_time_ms:
+        if require_exact_close and end_time_ms is not None and matched_close_ms is None:
             result["error"] = "missing_close_time"
         result["ok"] = bool(result["http_ok"] and (result["data_ok"] or not require_exact_close))
         return result
@@ -419,6 +413,7 @@ async def run_proxy_shard(
                 args.kline_limit,
                 end_time_ms,
                 args.require_exact_close,
+                kline_target.uses_symbol_close(args),
             )
 
     timeout = httpx.Timeout(args.rest_timeout_seconds)
@@ -525,8 +520,7 @@ def render_markdown(payload: dict[str, Any], json_name: str, csv_name: str) -> s
         f"- rounds: {config['rounds']}",
         f"- per_proxy_concurrency: {config['per_proxy_concurrency'] or 'symbol_count'}",
         f"- per_proxy_min_interval_ms: {config['per_proxy_min_interval_ms']}",
-        f"- target_close_time_ms: {payload['target']['end_time_ms']}",
-        f"- target_close_time: {payload['target']['end_time']}",
+        *kline_target.markdown_target(payload["target"]),
         "",
         "## Summary",
         "",
@@ -681,8 +675,12 @@ async def main_async() -> None:
         else:
             server_time = await fetch_server_time(args.rest_base, metadata_proxy, args.rest_timeout_seconds)
             server_time_ms = int(server_time.get("server_time_ms") or server_time.get("fallback_local_ms") or now_ms())
-            end_time_ms = latest_closed_kline_close_ms(server_time_ms, args.interval)
+            if kline_target.uses_symbol_close(args):
+                end_time_ms = server_time_ms - kline_target.THREE_DAYS_MS
+            else:
+                end_time_ms = latest_closed_kline_close_ms(server_time_ms, args.interval)
 
+    target = kline_target.describe_target(end_time_ms, kline_target.uses_symbol_close(args))
     print(
         json.dumps(
             {
@@ -693,7 +691,7 @@ async def main_async() -> None:
                 "symbols_per_proxy": args.symbols_per_proxy,
                 "assignment": args.assignment,
                 "interval": args.interval,
-                "end_time_ms": end_time_ms,
+                **target,
             },
             ensure_ascii=False,
         ),
@@ -740,10 +738,7 @@ async def main_async() -> None:
         },
         "proxy_probe_results": probe_results,
         "server_time": server_time,
-        "target": {
-            "end_time_ms": end_time_ms,
-            "end_time": ms_text(end_time_ms),
-        },
+        "target": target,
         "selected_symbol_count": len(symbols),
         "selected_symbols": symbols,
         "summary": summary,
