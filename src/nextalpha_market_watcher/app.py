@@ -224,7 +224,14 @@ class App:
                     break
 
                 if refresh_task in done:
-                    new_syms = await self._binance.fetch_symbols()
+                    try:
+                        new_syms = await self._binance.fetch_symbols()
+                    except Exception:
+                        logger.exception("symbols.refresh.failed keep_current=%s", len(syms))
+                        new_syms = syms
+                    if not new_syms:
+                        logger.warning("symbols.refresh.empty keep_current=%s", len(syms))
+                        new_syms = syms
                     if set(new_syms) != set(syms):
                         logger.info("symbols.refresh %s->%s", len(syms), len(new_syms))
                         if self._alerts is not None:
