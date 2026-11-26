@@ -232,7 +232,9 @@ def latest_closed_kline_close_ms(server_time_ms: int, interval: str) -> int:
     interval_ms = INTERVAL_MS.get(interval)
     if interval_ms is None:
         raise ValueError(f"Unsupported interval for automatic endTime: {interval!r}")
-    current_open_ms = (server_time_ms // interval_ms) * interval_ms
+    # Binance weeks open on Monday, four days after the Thursday Unix epoch.
+    anchor_ms = 4 * INTERVAL_MS["1d"] if interval == "1w" else 0
+    current_open_ms = server_time_ms - (server_time_ms - anchor_ms) % interval_ms
     return current_open_ms - 1
 
 
