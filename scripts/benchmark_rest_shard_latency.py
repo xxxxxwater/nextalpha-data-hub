@@ -229,13 +229,14 @@ async def fetch_rest_kline(
     params: dict[str, Any] = {"symbol": symbol, "interval": interval, "limit": limit}
     if end_time_ms is not None:
         params["endTime"] = end_time_ms
+    result: dict[str, Any] | None = None
     try:
         resp = await client.get(url, params=params)
         response_ms = now_ms()
         used_weight_1m = parse_optional_int(resp.headers.get("x-mbx-used-weight-1m"))
         used_weight = parse_optional_int(resp.headers.get("x-mbx-used-weight"))
         status = resp.status_code
-        result: dict[str, Any] = {
+        result = {
             "symbol": symbol,
             "status": status,
             "http_ok": 200 <= status < 300,
@@ -274,6 +275,10 @@ async def fetch_rest_kline(
         result["ok"] = bool(result["http_ok"] and (result["data_ok"] or not require_exact_close))
         return result
     except Exception as exc:
+        if result is not None:
+            result["error"] = type(exc).__name__
+            result["message"] = str(exc)
+            return result
         response_ms = now_ms()
         return {
             "symbol": symbol,
