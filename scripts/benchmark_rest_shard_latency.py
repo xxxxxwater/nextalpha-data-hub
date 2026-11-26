@@ -18,6 +18,11 @@ from urllib.parse import urlparse
 
 import httpx
 
+if __package__:
+    from . import benchmark_kline_target as kline_target
+else:
+    import benchmark_kline_target as kline_target
+
 
 DEFAULT_MAJOR_SYMBOLS = "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT"
 DEFAULT_OUTPUT_DIR = "logs/rest_shard_latency"
@@ -59,12 +64,6 @@ class RequestPacer:
 
 def now_ms() -> int:
     return int(time.time() * 1000)
-
-
-def ms_text(value: int | None) -> str:
-    if value is None:
-        return ""
-    return datetime.fromtimestamp(value / 1000).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
 def md_cell(value: Any) -> str:
@@ -222,6 +221,7 @@ async def fetch_rest_kline(
     limit: int,
     end_time_ms: int | None,
     require_exact_close: bool,
+    symbol_close: bool = False,
 ) -> dict[str, Any]:
     await pacer.wait()
     request_start_ms = now_ms()
@@ -258,18 +258,10 @@ async def fetch_rest_kline(
         if not isinstance(rows, list):
             result["error"] = "unexpected_response"
             return result
-        matched_close_ms: int | None = None
-        if end_time_ms is not None:
-            for row in reversed(rows):
-                if isinstance(row, list) and len(row) >= 8 and int(row[6]) == end_time_ms:
-                    matched_close_ms = int(row[6])
-                    break
-        elif rows and isinstance(rows[-1], list) and len(rows[-1]) >= 8:
-            matched_close_ms = int(rows[-1][6])
-
+        matched_close_ms = kline_target.match_close_time(rows, end_time_ms, symbol_close)
         result["matched_close_time_ms"] = matched_close_ms
         result["data_ok"] = matched_close_ms is not None
-        if require_exact_close and end_time_ms is not None and matched_close_ms != end_time_ms:
+        if require_exact_close and end_time_ms is not None and matched_close_ms is None:
             result["error"] = "missing_close_time"
         result["ok"] = bool(result["http_ok"] and (result["data_ok"] or not require_exact_close))
         return result
@@ -315,6 +307,7 @@ async def run_shard_round(
                 args.kline_limit,
                 end_time_ms,
                 args.require_exact_close,
+                kline_target.uses_symbol_close(args),
             )
 
     results = await asyncio.gather(*(one(symbol) for symbol in symbols))
@@ -495,8 +488,7 @@ def render_markdown(payload: dict[str, Any], json_name: str, csv_name: str) -> s
         f"- rest_concurrency: {config['rest_concurrency'] or 'shard_size'}",
         f"- rest_min_interval_ms: {config['rest_min_interval_ms']}",
         f"- parallel_ips_for_estimate: {config['parallel_ips']}",
-        f"- target_close_time_ms: {target.get('end_time_ms')}",
-        f"- target_close_time: {target.get('end_time')}",
+        *kline_target.markdown_target(target),
         "",
         "## Recommendation",
         "",
@@ -674,13 +666,17 @@ async def main_async() -> None:
         else:
             server_time = await fetch_server_time(args.rest_base, proxy, args.rest_timeout_seconds)
             server_time_ms = int(server_time.get("server_time_ms") or server_time.get("fallback_local_ms") or now_ms())
-            end_time_ms = latest_closed_kline_close_ms(server_time_ms, args.interval)
+            if kline_target.uses_symbol_close(args):
+                end_time_ms = server_time_ms - kline_target.THREE_DAYS_MS
+            else:
+                end_time_ms = latest_closed_kline_close_ms(server_time_ms, args.interval)
 
     pacer = RequestPacer(args.rest_min_interval_ms)
     rounds: list[dict[str, Any]] = []
     sizes = list(range(args.min_shard_size, max_shard_size + 1, args.step))
     timeout = httpx.Timeout(args.rest_timeout_seconds)
 
+    target = kline_target.describe_target(end_time_ms, kline_target.uses_symbol_close(args))
     print(
         json.dumps(
             {
@@ -690,7 +686,7 @@ async def main_async() -> None:
                 "rounds": args.rounds,
                 "warmup_rounds": args.warmup_rounds,
                 "interval": args.interval,
-                "end_time_ms": end_time_ms,
+                **target,
                 "rest_concurrency": args.rest_concurrency or "shard_size",
                 "rest_min_interval_ms": args.rest_min_interval_ms,
                 "proxy": bool(proxy),
@@ -797,10 +793,7 @@ async def main_async() -> None:
             "no_details": args.no_details,
         },
         "server_time": server_time,
-        "target": {
-            "end_time_ms": end_time_ms,
-            "end_time": ms_text(end_time_ms),
-        },
+        "target": target,
         "selected_symbol_count": len(symbols),
         "selected_symbols": symbols,
         "recommendations": recommendations,
