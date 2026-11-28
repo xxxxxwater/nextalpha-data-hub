@@ -248,18 +248,18 @@ class BinanceClient:
         cap = min(limit, self._cfg.backfill.klines_limit_cap)
         url = f"{self._cfg.binance.rest_base}/fapi/v1/klines"
         params = {"symbol": symbol, "interval": interval, "limit": cap}
+        request_started_ms = int(time.time() * 1000)
         resp = await client.get(url, params=params)
         resp.raise_for_status()
         raw_rows = resp.json()
         if not isinstance(raw_rows, list):
             return []
         out: list[ClosedKline] = []
-        now_ms = int(time.time() * 1000)
         for row in raw_rows:
             if not isinstance(row, list) or len(row) < 8:
                 continue
-            # REST may include the currently forming bar; only keep closed bars.
-            if int(row[6]) > now_ms:
+            # A snapshot taken before the inclusive close can arrive after rollover.
+            if int(row[6]) >= request_started_ms:
                 continue
             out.append(_kline_from_rest_row(symbol, interval, row))
         return out
